@@ -38,6 +38,41 @@ body {
     touch-action: none;
 }
 
+#uiOverlay,
+#leftZone,
+#rightZone,
+html,
+body,
+canvas {
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+#leftZone,
+#rightZone {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    width: 50vw;
+    background: transparent;
+    pointer-events: none;
+    z-index: 5;
+}
+
+#leftZone {
+    left: 0;
+}
+
+#rightZone {
+    right: 0;
+}
+
+body.mobile-input #leftZone,
+body.mobile-input #rightZone {
+    pointer-events: auto;
+}
+
 .mobile-controls {
     position: absolute;
     top: 0;
@@ -110,6 +145,7 @@ body {
     touch-action: manipulation;
     user-select: none;
     -webkit-user-select: none;
+    z-index: 12;
 }
 
 .mobile-controls.active .control-button {

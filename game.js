@@ -56,8 +56,8 @@
     let touchAim = { active: false, x: 0, y: 0 };
     let mobileMoveInput = { x: 0, y: 0 };
     let mobileMoveTarget = { x: 0, y: 0 };
-    let leftTouchId = null;
-    let rightTouchId = null;
+    let joystickPointerId = null;
+    let aimPointerId = null;
     const joystickDeadzone = 0.15;
     const joystickLerp = 0.2;
     
@@ -111,7 +111,9 @@
     const dashButton = document.getElementById('dashButton');
     const pauseButton = document.getElementById('pauseButton');
     const muteButton = document.getElementById('muteButton');
-    const mobileControls = document.getElementById('mobileControls');
+    const mobileControls = document.getElementById('uiOverlay');
+    const leftZone = document.getElementById('leftZone');
+    const rightZone = document.getElementById('rightZone');
     const audioHint = document.getElementById('audioHint');
 
     function lerp(a, b, t) {
@@ -144,6 +146,7 @@
         isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) ||
                    ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
         if (isMobile) {
+            document.body.classList.add('mobile-input');
             mobileControls.classList.add('active');
             audioHint.classList.add('show');
             updateJoystickBaseMetrics();
@@ -151,126 +154,144 @@
     }
     detectMobile();
     
-    // Touch event handlers
-    function handleTouchStart(e) {
+    function getCanvasCoords(clientX, clientY) {
+        const rect = canvas.getBoundingClientRect();
+        return { x: clientX - rect.left, y: clientY - rect.top };
+    }
+
+    function updateJoystickFromPoint(x, y) {
+        const dx = x - touchJoystick.centerX;
+        const dy = y - touchJoystick.centerY;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        const maxDist = touchJoystick.radius;
+
+        if (dist > 0) {
+            const clampedDist = Math.min(dist, maxDist);
+            const clampedX = (dx / dist) * clampedDist;
+            const clampedY = (dy / dist) * clampedDist;
+            setJoystickKnob(touchJoystick.centerX + clampedX, touchJoystick.centerY + clampedY);
+
+            const normalized = clampedDist / maxDist;
+            const strength = normalized <= joystickDeadzone
+                ? 0
+                : (normalized - joystickDeadzone) / (1 - joystickDeadzone);
+            touchJoystick.x = (dx / dist) * strength;
+            touchJoystick.y = (dy / dist) * strength;
+        } else {
+            touchJoystick.x = 0;
+            touchJoystick.y = 0;
+            resetJoystickKnob();
+        }
+
+        mobileMoveTarget.x = touchJoystick.x;
+        mobileMoveTarget.y = touchJoystick.y;
+    }
+
+    function handleLeftPointerDown(e) {
+        if (!isMobile || joystickPointerId !== null) return;
         e.preventDefault();
         initAudio();
         resumeAudio();
-
-        const rect = canvas.getBoundingClientRect();
-        const halfWidth = canvas.width / (2 * dpr);
-
-        for (const touch of e.changedTouches) {
-            const x = touch.clientX - rect.left;
-            const y = touch.clientY - rect.top;
-
-            if (x < halfWidth && leftTouchId === null) {
-                leftTouchId = touch.identifier;
-                touchJoystick.active = true;
-                touchJoystick.x = 0;
-                touchJoystick.y = 0;
-                mobileMoveTarget.x = 0;
-                mobileMoveTarget.y = 0;
-                if (touchJoystick.centerX === 0 && touchJoystick.centerY === 0) {
-                    updateJoystickBaseMetrics();
-                }
-                resetJoystickKnob();
-            } else if (x >= halfWidth && rightTouchId === null) {
-                rightTouchId = touch.identifier;
-                touchAim.active = true;
-                touchAim.x = x;
-                touchAim.y = y;
-                mouse.worldX = x;
-                mouse.worldY = y;
-                mouse.down = true;
-            }
+        joystickPointerId = e.pointerId;
+        leftZone.setPointerCapture(joystickPointerId);
+        touchJoystick.active = true;
+        touchJoystick.x = 0;
+        touchJoystick.y = 0;
+        mobileMoveTarget.x = 0;
+        mobileMoveTarget.y = 0;
+        if (touchJoystick.centerX === 0 && touchJoystick.centerY === 0) {
+            updateJoystickBaseMetrics();
         }
+        resetJoystickKnob();
+        const pos = getCanvasCoords(e.clientX, e.clientY);
+        updateJoystickFromPoint(pos.x, pos.y);
     }
-    
-    function handleTouchMove(e) {
+
+    function handleLeftPointerMove(e) {
+        if (!isMobile || e.pointerId !== joystickPointerId || !touchJoystick.active) return;
         e.preventDefault();
-        const rect = canvas.getBoundingClientRect();
-
-        for (const touch of e.changedTouches) {
-            const x = touch.clientX - rect.left;
-            const y = touch.clientY - rect.top;
-
-            if (touch.identifier === leftTouchId && touchJoystick.active) {
-                const dx = x - touchJoystick.centerX;
-                const dy = y - touchJoystick.centerY;
-                const dist = Math.sqrt(dx * dx + dy * dy);
-                const maxDist = touchJoystick.radius;
-
-                if (dist > 0) {
-                    const clampedDist = Math.min(dist, maxDist);
-                    const clampedX = (dx / dist) * clampedDist;
-                    const clampedY = (dy / dist) * clampedDist;
-                    setJoystickKnob(touchJoystick.centerX + clampedX, touchJoystick.centerY + clampedY);
-
-                    const normalized = clampedDist / maxDist;
-                    const strength = normalized <= joystickDeadzone
-                        ? 0
-                        : (normalized - joystickDeadzone) / (1 - joystickDeadzone);
-                    touchJoystick.x = (dx / dist) * strength;
-                    touchJoystick.y = (dy / dist) * strength;
-                } else {
-                    touchJoystick.x = 0;
-                    touchJoystick.y = 0;
-                    resetJoystickKnob();
-                }
-
-                mobileMoveTarget.x = touchJoystick.x;
-                mobileMoveTarget.y = touchJoystick.y;
-            }
-
-            if (touch.identifier === rightTouchId && touchAim.active) {
-                touchAim.x = x;
-                touchAim.y = y;
-                mouse.worldX = x;
-                mouse.worldY = y;
-            }
-        }
+        const pos = getCanvasCoords(e.clientX, e.clientY);
+        updateJoystickFromPoint(pos.x, pos.y);
     }
-    
-    function handleTouchEnd(e) {
+
+    function handleLeftPointerUp(e) {
+        if (e.pointerId !== joystickPointerId) return;
         e.preventDefault();
-        for (const touch of e.changedTouches) {
-            if (touch.identifier === leftTouchId) {
-                leftTouchId = null;
-                touchJoystick.active = false;
-                touchJoystick.x = 0;
-                touchJoystick.y = 0;
-                mobileMoveTarget.x = 0;
-                mobileMoveTarget.y = 0;
-                resetJoystickKnob();
-            }
-
-            if (touch.identifier === rightTouchId) {
-                rightTouchId = null;
-                touchAim.active = false;
-                mouse.down = false;
-            }
-        }
+        leftZone.releasePointerCapture(joystickPointerId);
+        joystickPointerId = null;
+        touchJoystick.active = false;
+        touchJoystick.x = 0;
+        touchJoystick.y = 0;
+        mobileMoveTarget.x = 0;
+        mobileMoveTarget.y = 0;
+        resetJoystickKnob();
     }
-    
-    canvas.addEventListener('touchstart', handleTouchStart, { passive: false });
-    canvas.addEventListener('touchmove', handleTouchMove, { passive: false });
-    canvas.addEventListener('touchend', handleTouchEnd, { passive: false });
-    canvas.addEventListener('touchcancel', handleTouchEnd, { passive: false });
+
+    function handleRightPointerDown(e) {
+        if (!isMobile || aimPointerId !== null) return;
+        e.preventDefault();
+        initAudio();
+        resumeAudio();
+        aimPointerId = e.pointerId;
+        rightZone.setPointerCapture(aimPointerId);
+        const pos = getCanvasCoords(e.clientX, e.clientY);
+        touchAim.active = true;
+        touchAim.x = pos.x;
+        touchAim.y = pos.y;
+        mouse.worldX = pos.x;
+        mouse.worldY = pos.y;
+        mouse.down = true;
+    }
+
+    function handleRightPointerMove(e) {
+        if (!isMobile || e.pointerId !== aimPointerId || !touchAim.active) return;
+        e.preventDefault();
+        const pos = getCanvasCoords(e.clientX, e.clientY);
+        touchAim.x = pos.x;
+        touchAim.y = pos.y;
+        mouse.worldX = pos.x;
+        mouse.worldY = pos.y;
+    }
+
+    function handleRightPointerUp(e) {
+        if (e.pointerId !== aimPointerId) return;
+        e.preventDefault();
+        rightZone.releasePointerCapture(aimPointerId);
+        aimPointerId = null;
+        touchAim.active = false;
+        mouse.down = false;
+    }
+
+    if (leftZone && rightZone) {
+        leftZone.addEventListener('pointerdown', handleLeftPointerDown);
+        leftZone.addEventListener('pointermove', handleLeftPointerMove);
+        leftZone.addEventListener('pointerup', handleLeftPointerUp);
+        leftZone.addEventListener('pointercancel', handleLeftPointerUp);
+
+        rightZone.addEventListener('pointerdown', handleRightPointerDown);
+        rightZone.addEventListener('pointermove', handleRightPointerMove);
+        rightZone.addEventListener('pointerup', handleRightPointerUp);
+        rightZone.addEventListener('pointercancel', handleRightPointerUp);
+    }
     
     // Button handlers
-    dashButton.addEventListener('touchstart', (e) => {
+    dashButton.addEventListener('pointerdown', (e) => {
         e.preventDefault();
+        e.stopPropagation();
         initAudio();
         resumeAudio();
         keys['shift'] = true;
     });
-    dashButton.addEventListener('touchend', (e) => {
+    dashButton.addEventListener('pointerup', (e) => {
+        e.preventDefault();
+        keys['shift'] = false;
+    });
+    dashButton.addEventListener('pointercancel', (e) => {
         e.preventDefault();
         keys['shift'] = false;
     });
     
-    pauseButton.addEventListener('touchstart', (e) => {
+    pauseButton.addEventListener('pointerdown', (e) => {
         e.preventDefault();
         initAudio();
         resumeAudio();
@@ -278,7 +299,7 @@
         gameState = paused ? 'paused' : 'playing';
     });
     
-    muteButton.addEventListener('touchstart', (e) => {
+    muteButton.addEventListener('pointerdown', (e) => {
         e.preventDefault();
         initAudio();
         resumeAudio();
@@ -313,13 +334,13 @@
     
     // Prevent default touch behaviors
     document.addEventListener('touchstart', (e) => {
-        if (e.target === canvas || e.target.closest('.mobile-controls')) {
+        if (e.target === canvas || e.target.closest('.mobile-controls') || e.target === leftZone || e.target === rightZone) {
             e.preventDefault();
         }
     }, { passive: false });
     
     document.addEventListener('touchmove', (e) => {
-        if (e.target === canvas || e.target.closest('.mobile-controls')) {
+        if (e.target === canvas || e.target.closest('.mobile-controls') || e.target === leftZone || e.target === rightZone) {
             e.preventDefault();
         }
     }, { passive: false });
@@ -1002,8 +1023,8 @@
         mobileMoveInput.y = 0;
         mobileMoveTarget.x = 0;
         mobileMoveTarget.y = 0;
-        leftTouchId = null;
-        rightTouchId = null;
+        joystickPointerId = null;
+        aimPointerId = null;
     }
 
     // Game loop
@@ -1189,6 +1210,14 @@
         if (muted) {
             ctx.fillStyle = '#ff0';
             ctx.fillText('MUTED', 10, canvas.height / dpr - 10);
+        }
+
+        if (isMobile) {
+            const debugY = canvas.height / dpr - 30;
+            ctx.fillStyle = '#0ff';
+            ctx.font = '14px monospace';
+            ctx.fillText(`Joy: ${mobileMoveInput.x.toFixed(2)}, ${mobileMoveInput.y.toFixed(2)}`, 10, debugY);
+            ctx.fillText(`Shooting: ${touchAim.active}`, 10, debugY + 18);
         }
 
         if (waveBannerTime > 0) {
