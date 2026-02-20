@@ -25,7 +25,10 @@
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     }
     resizeCanvas();
-    window.addEventListener('resize', resizeCanvas);
+    window.addEventListener('resize', () => {
+        resizeCanvas();
+        updateJoystickBaseMetrics();
+    });
 
     // Game state
     let gameState = 'playing'; // 'playing', 'paused', 'gameOver'
@@ -52,6 +55,11 @@
     let touchJoystick = { active: false, centerX: 0, centerY: 0, x: 0, y: 0, radius: 60 };
     let touchAim = { active: false, x: 0, y: 0 };
     let mobileMoveInput = { x: 0, y: 0 };
+    let mobileMoveTarget = { x: 0, y: 0 };
+    let leftTouchId = null;
+    let rightTouchId = null;
+    const joystickDeadzone = 0.15;
+    const joystickLerp = 0.2;
     
     // Sound spam limiter
     let soundTimestamps = [];
@@ -105,6 +113,31 @@
     const muteButton = document.getElementById('muteButton');
     const mobileControls = document.getElementById('mobileControls');
     const audioHint = document.getElementById('audioHint');
+
+    function lerp(a, b, t) {
+        return a + (b - a) * t;
+    }
+
+    function updateJoystickBaseMetrics() {
+        if (!joystickBase || !joystickKnob) return;
+        const baseRect = joystickBase.getBoundingClientRect();
+        if (baseRect.width === 0 || baseRect.height === 0) return;
+        const canvasRect = canvas.getBoundingClientRect();
+        touchJoystick.centerX = baseRect.left - canvasRect.left + baseRect.width / 2;
+        touchJoystick.centerY = baseRect.top - canvasRect.top + baseRect.height / 2;
+        touchJoystick.radius = baseRect.width / 2;
+        resetJoystickKnob();
+    }
+
+    function setJoystickKnob(x, y) {
+        const canvasHeight = canvas.height / dpr;
+        joystickKnob.style.left = `${x}px`;
+        joystickKnob.style.bottom = `${canvasHeight - y}px`;
+    }
+
+    function resetJoystickKnob() {
+        setJoystickKnob(touchJoystick.centerX, touchJoystick.centerY);
+    }
     
     // Detect mobile
     function detectMobile() {
@@ -113,6 +146,7 @@
         if (isMobile) {
             mobileControls.classList.add('active');
             audioHint.classList.add('show');
+            updateJoystickBaseMetrics();
         }
     }
     detectMobile();
@@ -122,94 +156,100 @@
         e.preventDefault();
         initAudio();
         resumeAudio();
-        
-        const touch = e.touches[0];
+
         const rect = canvas.getBoundingClientRect();
-        const x = touch.clientX - rect.left;
-        const y = touch.clientY - rect.top;
         const halfWidth = canvas.width / (2 * dpr);
-        
-        // Left half: joystick
-        if (x < halfWidth) {
-            touchJoystick.active = true;
-            touchJoystick.centerX = x;
-            touchJoystick.centerY = y;
-            touchJoystick.x = 0;
-            touchJoystick.y = 0;
-            
-            const baseRect = joystickBase.getBoundingClientRect();
-            joystickBase.style.left = (x - 60) + 'px';
-            joystickBase.style.bottom = (canvas.height / dpr - y - 60) + 'px';
-            joystickKnob.style.left = (x - 30) + 'px';
-            joystickKnob.style.bottom = (canvas.height / dpr - y - 30) + 'px';
-        } else {
-            // Right half: aim + shoot
-            touchAim.active = true;
-            touchAim.x = x;
-            touchAim.y = y;
-            mouse.worldX = x;
-            mouse.worldY = y;
-            mouse.down = true;
+
+        for (const touch of e.changedTouches) {
+            const x = touch.clientX - rect.left;
+            const y = touch.clientY - rect.top;
+
+            if (x < halfWidth && leftTouchId === null) {
+                leftTouchId = touch.identifier;
+                touchJoystick.active = true;
+                touchJoystick.x = 0;
+                touchJoystick.y = 0;
+                mobileMoveTarget.x = 0;
+                mobileMoveTarget.y = 0;
+                if (touchJoystick.centerX === 0 && touchJoystick.centerY === 0) {
+                    updateJoystickBaseMetrics();
+                }
+                resetJoystickKnob();
+            } else if (x >= halfWidth && rightTouchId === null) {
+                rightTouchId = touch.identifier;
+                touchAim.active = true;
+                touchAim.x = x;
+                touchAim.y = y;
+                mouse.worldX = x;
+                mouse.worldY = y;
+                mouse.down = true;
+            }
         }
     }
     
     function handleTouchMove(e) {
         e.preventDefault();
-        const touch = e.touches[0];
         const rect = canvas.getBoundingClientRect();
-        const x = touch.clientX - rect.left;
-        const y = touch.clientY - rect.top;
-        
-        if (touchJoystick.active) {
-            const dx = x - touchJoystick.centerX;
-            const dy = y - touchJoystick.centerY;
-            const dist = Math.sqrt(dx * dx + dy * dy);
-            const maxDist = touchJoystick.radius;
-            
-            if (dist > maxDist) {
-                touchJoystick.x = (dx / dist) * maxDist / maxDist;
-                touchJoystick.y = (dy / dist) * maxDist / maxDist;
-            } else {
-                touchJoystick.x = dx / maxDist;
-                touchJoystick.y = dy / maxDist;
+
+        for (const touch of e.changedTouches) {
+            const x = touch.clientX - rect.left;
+            const y = touch.clientY - rect.top;
+
+            if (touch.identifier === leftTouchId && touchJoystick.active) {
+                const dx = x - touchJoystick.centerX;
+                const dy = y - touchJoystick.centerY;
+                const dist = Math.sqrt(dx * dx + dy * dy);
+                const maxDist = touchJoystick.radius;
+
+                if (dist > 0) {
+                    const clampedDist = Math.min(dist, maxDist);
+                    const clampedX = (dx / dist) * clampedDist;
+                    const clampedY = (dy / dist) * clampedDist;
+                    setJoystickKnob(touchJoystick.centerX + clampedX, touchJoystick.centerY + clampedY);
+
+                    const normalized = clampedDist / maxDist;
+                    const strength = normalized <= joystickDeadzone
+                        ? 0
+                        : (normalized - joystickDeadzone) / (1 - joystickDeadzone);
+                    touchJoystick.x = (dx / dist) * strength;
+                    touchJoystick.y = (dy / dist) * strength;
+                } else {
+                    touchJoystick.x = 0;
+                    touchJoystick.y = 0;
+                    resetJoystickKnob();
+                }
+
+                mobileMoveTarget.x = touchJoystick.x;
+                mobileMoveTarget.y = touchJoystick.y;
             }
-            
-            joystickKnob.style.left = (touchJoystick.centerX + touchJoystick.x * maxDist - 30) + 'px';
-            joystickKnob.style.bottom = (canvas.height / dpr - (touchJoystick.centerY + touchJoystick.y * maxDist) - 30) + 'px';
-            
-            mobileMoveInput.x = touchJoystick.x;
-            mobileMoveInput.y = touchJoystick.y;
-        }
-        
-        if (touchAim.active) {
-            touchAim.x = x;
-            touchAim.y = y;
-            mouse.worldX = x;
-            mouse.worldY = y;
+
+            if (touch.identifier === rightTouchId && touchAim.active) {
+                touchAim.x = x;
+                touchAim.y = y;
+                mouse.worldX = x;
+                mouse.worldY = y;
+            }
         }
     }
     
     function handleTouchEnd(e) {
         e.preventDefault();
-        const touch = e.changedTouches[0];
-        const rect = canvas.getBoundingClientRect();
-        const x = touch.clientX - rect.left;
-        const y = touch.clientY - rect.top;
-        const halfWidth = canvas.width / (2 * dpr);
-        
-        if (x < halfWidth && touchJoystick.active) {
-            touchJoystick.active = false;
-            touchJoystick.x = 0;
-            touchJoystick.y = 0;
-            mobileMoveInput.x = 0;
-            mobileMoveInput.y = 0;
-            joystickKnob.style.left = joystickBase.style.left;
-            joystickKnob.style.bottom = joystickBase.style.bottom;
-        }
-        
-        if (x >= halfWidth && touchAim.active) {
-            touchAim.active = false;
-            mouse.down = false;
+        for (const touch of e.changedTouches) {
+            if (touch.identifier === leftTouchId) {
+                leftTouchId = null;
+                touchJoystick.active = false;
+                touchJoystick.x = 0;
+                touchJoystick.y = 0;
+                mobileMoveTarget.x = 0;
+                mobileMoveTarget.y = 0;
+                resetJoystickKnob();
+            }
+
+            if (touch.identifier === rightTouchId) {
+                rightTouchId = null;
+                touchAim.active = false;
+                mouse.down = false;
+            }
         }
     }
     
@@ -524,20 +564,27 @@
             if (!this.dashActive) {
                 // Normal movement - mobile joystick or keyboard
                 let dx = 0, dy = 0;
-                if (isMobile && touchJoystick.active) {
+                let keyDx = 0, keyDy = 0;
+
+                if (isMobile) {
+                    mobileMoveInput.x = lerp(mobileMoveInput.x, mobileMoveTarget.x, joystickLerp);
+                    mobileMoveInput.y = lerp(mobileMoveInput.y, mobileMoveTarget.y, joystickLerp);
+                    if (Math.abs(mobileMoveInput.x) < 0.001) mobileMoveInput.x = 0;
+                    if (Math.abs(mobileMoveInput.y) < 0.001) mobileMoveInput.y = 0;
+                }
+
+                if (keys['w'] || keys['arrowup']) keyDy -= 1;
+                if (keys['s'] || keys['arrowdown']) keyDy += 1;
+                if (keys['a'] || keys['arrowleft']) keyDx -= 1;
+                if (keys['d'] || keys['arrowright']) keyDx += 1;
+                
+                if (keyDx !== 0 || keyDy !== 0) {
+                    const len = Math.sqrt(keyDx * keyDx + keyDy * keyDy);
+                    dx = keyDx / len;
+                    dy = keyDy / len;
+                } else if (isMobile && (touchJoystick.active || mobileMoveInput.x !== 0 || mobileMoveInput.y !== 0)) {
                     dx = mobileMoveInput.x;
                     dy = mobileMoveInput.y;
-                } else {
-                    if (keys['w'] || keys['arrowup']) dy -= 1;
-                    if (keys['s'] || keys['arrowdown']) dy += 1;
-                    if (keys['a'] || keys['arrowleft']) dx -= 1;
-                    if (keys['d'] || keys['arrowright']) dx += 1;
-                    
-                    if (dx !== 0 || dy !== 0) {
-                        const len = Math.sqrt(dx * dx + dy * dy);
-                        dx /= len;
-                        dy /= len;
-                    }
                 }
                 
                 if (dx !== 0 || dy !== 0) {
@@ -953,6 +1000,10 @@
         touchAim.active = false;
         mobileMoveInput.x = 0;
         mobileMoveInput.y = 0;
+        mobileMoveTarget.x = 0;
+        mobileMoveTarget.y = 0;
+        leftTouchId = null;
+        rightTouchId = null;
     }
 
     // Game loop
